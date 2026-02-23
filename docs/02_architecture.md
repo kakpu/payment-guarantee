@@ -6,7 +6,8 @@
 - **バックエンド**: Supabase (PostgreSQL + Auth + Storage + Edge Functions)
 - **データベース**: PostgreSQL (Supabase管理)
 - **認証**: Supabase Auth (Email/Password)
-- **インフラ**: Supabase Cloud
+- **フロントエンドホスティング**: Vercel（CDN・自動デプロイ）
+- **バッチ実行基盤**: Supabase Cloud + GitHub Actions
 - **UI アイコン**: Lucide React
 
 ## システム構成図
@@ -19,11 +20,20 @@ graph TB
         Pages[ページコンポーネント]
     end
 
+    subgraph Vercel["Vercel（フロントエンドホスティング）"]
+        CDN[CDN / エッジネットワーク]
+        Build[ビルド成果物 dist/]
+    end
+
     subgraph Supabase["Supabase Cloud"]
         DB[(PostgreSQL)]
         AuthSvc[Auth Service]
-        Storage[Storage]
+        Storage[Storage\nprivate bucket]
         Functions[Edge Functions]
+    end
+
+    subgraph CI["GitHub Actions"]
+        Cron[定期実行 JST 20:00]
     end
 
     subgraph External["外部サービス（将来）"]
@@ -31,16 +41,21 @@ graph TB
         Batch[代弁実行システム]
     end
 
-    UI --> Auth
+    Client -->|HTTPS| CDN
+    CDN --> Build
     Auth --> AuthSvc
     Pages --> DB
-    Pages --> Storage
-    Pages --> Functions
+    Pages -->|署名付きURL発行| Storage
+    Cron -->|POST| Functions
+    Functions --> DB
+    Functions --> Storage
     Functions --> OCR
     Functions --> Batch
 
     style Client fill:#e3f2fd
+    style Vercel fill:#e8f5e9
     style Supabase fill:#f3e5f5
+    style CI fill:#fff8e1
     style External fill:#fff3e0
 ```
 
@@ -62,6 +77,15 @@ graph TB
   - リアルタイム機能（将来的な拡張に対応）
   - 低コスト（個人開発に最適）
 
+### Vercel
+- **理由**: Vite ビルドをゼロ設定でデプロイ可能。グローバル CDN を標準提供
+- **メリット**:
+  - GitHub リポジトリと連携し、`main` ブランチへの push で自動デプロイ
+  - エッジネットワーク（全世界 100+ PoP）による高速配信
+  - 環境変数の GUI 管理（`VITE_SUPABASE_URL` 等）
+  - プレビューデプロイ（PR ごとに固有 URL を発行）
+  - Free Tier で個人開発に十分な帯域
+
 ### Vite
 - **理由**: 高速なビルド、HMR（ホットモジュールリプレースメント）
 - **メリット**: 開発体験の向上、本番ビルドの最適化
@@ -79,9 +103,9 @@ graph TB
 
 ### 2. 書類アップロードフロー
 ```
-画像選択 → UploadDocument → Supabase Storage
+画像選択 → UploadDocument → Supabase Storage（privateバケット）
                                    ↓
-                           画像URL取得
+                     オブジェクトキー（パス）のみ取得
                                    ↓
                          documents テーブル登録
                                    ↓
@@ -92,7 +116,9 @@ graph TB
 
 ### 3. 書類確認フロー
 ```
-書類一覧 → DocumentList → DocumentDetail
+書類一覧 → DocumentList → createSignedUrl（有効期限1時間）
+                               ↓
+                        DocumentDetail
                                ↓
                       画像 + OCR データ表示
                                ↓
@@ -112,7 +138,7 @@ graph TB
 - `id`: UUID（主キー）
 - `user_id`: UUID（auth.users参照）
 - `document_type`: テキスト（書類種別）
-- `image_url`: テキスト（画像URL）
+- `image_url`: テキスト（Storage オブジェクトキー。公開URLではない）
 - `status`: テキスト（処理状態）
 - `created_at`, `updated_at`: タイムスタンプ
 
@@ -164,9 +190,10 @@ CREATE POLICY "Users can insert their own documents"
   WITH CHECK (auth.uid() = user_id);
 ```
 
-#### Storage
+#### Storage（プライベートバケット）
 ```sql
 -- ユーザーは自分のフォルダ (user_id) のみアクセス可能
+-- バケットは public: false（署名付きURLでのみ閲覧可能）
 CREATE POLICY "Users can upload their own documents"
   ON storage.objects FOR INSERT
   TO authenticated
@@ -183,6 +210,11 @@ CREATE POLICY "Users can upload their own documents"
 
 ## 初期コスト（月額）
 
+### Vercel Free Tier
+- **帯域**: 100GB/月
+- **ビルド**: 6,000 分/月
+- **合計**: $0/月
+
 ### Supabase Free Tier
 - **データベース**: 500MB まで無料
 - **ストレージ**: 1GB まで無料
@@ -191,32 +223,29 @@ CREATE POLICY "Users can upload their own documents"
 - **合計**: $0/月
 
 ### 想定スケールアップ時（Pro プラン）
+- **Vercel Pro**: $20/月（チーム利用時）
 - **Supabase Pro**: $25/月
-  - データベース: 8GB
-  - ストレージ: 100GB
-  - 無制限 API リクエスト
-- **合計**: $25/月
+- **合計**: $45/月
 
 ## パフォーマンス最適化
 
 ### 実装済み
 - Tailwind CSS の本番ビルド最適化（PurgeCSS）
-- Vite による高速ビルド
+- Vite による高速ビルド（バンドルサイズ 305 KB / gzip 89 KB）
 - インデックス作成（user_id, status, document_id）
+- Vercel グローバル CDN による静的アセット配信
 - 画像の遅延読み込み
 
 ### 将来的な最適化
 - 画像の自動圧縮・リサイズ
-- CDN 配信
-- キャッシング戦略
+- キャッシング戦略の精緻化
 - リアルタイム同期の最適化
 
 ## 拡張性
 
 ### 短期的な拡張
 1. OCR API 統合（Edge Functions 経由）
-2. バッチ連携機能（Edge Functions + Cron）
-3. 画像プレビュー機能の強化
+2. 画像プレビュー機能の強化
 
 ### 長期的な拡張
 1. 権限管理システム（ロールベースアクセス制御）
@@ -228,24 +257,50 @@ CREATE POLICY "Users can upload their own documents"
 ## 運用・保守
 
 ### 監視
-- Supabase Dashboard での監視
-- エラーログの確認
-- パフォーマンスメトリクスの追跡
+- Vercel Dashboard（デプロイ状況・関数ログ）
+- Supabase Dashboard（DB・Storage・Edge Function ログ）
+- GitHub Actions（バッチ実行履歴）
 
 ### バックアップ
 - Supabase による自動バックアップ（日次）
 - Point-in-Time Recovery（PITR）対応
 
-### デプロイ
-- Git による自動デプロイ（Vercel, Netlify 等）
-- CI/CD パイプライン設定
+### デプロイ手順
+
+#### フロントエンド（Vercel）
+1. GitHub リポジトリを Vercel プロジェクトに連携
+2. Vercel ダッシュボード → Settings → Environment Variables に以下を登録:
+
+| 変数名 | 値 |
+|---|---|
+| `VITE_SUPABASE_URL` | `https://ckdofopojlxqdnerxmdk.supabase.co` |
+| `VITE_SUPABASE_ANON_KEY` | Supabase ダッシュボードの anon キー |
+
+3. Build Command: `npm run build`、Output Directory: `dist` を確認（Vite 検出で自動設定される）
+4. `main` ブランチへ push → Vercel が自動ビルド・デプロイ
+
+#### バックエンド（Supabase）
+```bash
+npx supabase link --project-ref ckdofopojlxqdnerxmdk
+npx supabase db push
+npx supabase functions deploy batch-export
+```
+
+#### バッチ自動実行（GitHub Actions）
+GitHub リポジトリ → Settings → Secrets and variables → Actions に以下を登録:
+
+| シークレット名 | 値 |
+|---|---|
+| `SUPABASE_URL` | `https://ckdofopojlxqdnerxmdk.supabase.co` |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase ダッシュボードの service_role キー |
 
 ## まとめ
 
 このアーキテクチャは、個人開発に最適化されており、以下の特徴があります：
 
-- **低コスト**: 初期費用 $0、スケールアップ時も $25/月程度
+- **低コスト**: 初期費用 $0（Vercel Free + Supabase Free）、スケールアップ時も $45/月程度
 - **高速開発**: React + TypeScript + Tailwind CSS + Supabase のモダンスタック
-- **セキュア**: RLS による細かいアクセス制御
+- **ゼロ運用**: Vercel 自動デプロイ + Supabase フルマネージド + GitHub Actions バッチ
+- **セキュア**: RLS + プライベートバケット + 署名付きURL による多層防御
 - **拡張性**: 将来的な機能追加に柔軟に対応
 - **保守性**: TypeScript による型安全性、明確なコンポーネント分割

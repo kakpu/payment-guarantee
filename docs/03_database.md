@@ -165,7 +165,7 @@ CREATE TABLE batch_exports (
   id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   executed_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   document_count  INTEGER     NOT NULL DEFAULT 0,
-  status          TEXT        NOT NULL CHECK (status IN ('running', 'success', 'failed')),
+  status          TEXT        NOT NULL CHECK (status IN ('success', 'failed')),
   error_message   TEXT,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -236,16 +236,25 @@ uploaded → ocr_processing → ocr_completed → confirmed
 
 ## ストレージ設計
 
+### バケット一覧
+
+| バケット名 | 公開設定 | 用途 |
+|---|---|---|
+| `documents` | private | 本人確認書類の画像（マイナンバーカード・運転免許証） |
+| `batch-exports` | private | 日次バッチ CSV（`{YYYY-MM-DD}.csv`） |
+
+### `documents` バケット詳細
+
 | 項目 | 値 |
 |---|---|
-| バケット名 | `documents` |
-| パス構成 | `documents/{user_id}/{timestamp}.{ext}` |
+| パス構成 | `{user_id}/{timestamp}.{ext}` |
 | 対応形式 | PNG, JPG, JPEG |
 | 最大ファイルサイズ | 5MB |
-| アクセス制御 | RLSポリシーでuser_idフォルダのみ許可 |
+| アクセス方式 | **署名付きURL**（有効期限1時間）。公開URLは発行しない |
+| DB保存値 | オブジェクトキー（パス）のみ。URLは保存しない |
 
 ```sql
--- Supabase Storage RLS
+-- Supabase Storage RLS（documents バケット）
 CREATE POLICY "自分のフォルダにのみアップロード可能"
   ON storage.objects FOR INSERT TO authenticated
   WITH CHECK (
@@ -253,10 +262,25 @@ CREATE POLICY "自分のフォルダにのみアップロード可能"
     (storage.foldername(name))[1] = auth.uid()::text
   );
 
-CREATE POLICY "自分のファイルのみ閲覧可能"
+CREATE POLICY "自分のファイルのみ閲覧可能（署名付きURL発行に必要）"
   ON storage.objects FOR SELECT TO authenticated
   USING (
     bucket_id = 'documents' AND
     (storage.foldername(name))[1] = auth.uid()::text
   );
+```
+
+### `batch-exports` バケット詳細
+
+| 項目 | 値 |
+|---|---|
+| パス構成 | `{YYYY-MM-DD}.csv` |
+| 書き込み権限 | service_role のみ（Edge Function から書き込む） |
+| 読み取り権限 | 認証済みユーザー（将来の管理者画面対応を想定） |
+
+```sql
+-- Supabase Storage RLS（batch-exports バケット）
+CREATE POLICY "認証済みユーザーはバッチCSVを閲覧可能"
+  ON storage.objects FOR SELECT TO authenticated
+  USING (bucket_id = 'batch-exports');
 ```

@@ -27,6 +27,7 @@
 | レイヤー | 技術 |
 |---|---|
 | フロントエンド | React 18.3 + TypeScript 5.5 + Tailwind CSS 3.4 + Vite 5.4 |
+| フロントエンドホスティング | **Vercel**（CDN・自動デプロイ・プレビュー環境） |
 | バックエンド | Supabase（PostgreSQL + Auth + Storage + Edge Functions） |
 | 認証 | Supabase Auth（Email/Password） |
 | バッチ実行 | GitHub Actions + Supabase Edge Function（Deno） |
@@ -200,12 +201,15 @@ uploaded → (ocr_processing → ocr_completed) → confirmed
 
 ## 環境変数
 
-| 変数名 | 用途 | 設定場所 |
-|---|---|---|
-| `VITE_SUPABASE_URL` | Supabase プロジェクト URL | `.env` |
-| `VITE_SUPABASE_ANON_KEY` | Supabase 匿名キー（RLS 適用） | `.env` |
-| `SUPABASE_URL` | バッチ Edge Function 呼び出し用 URL | GitHub Secrets |
-| `SUPABASE_SERVICE_ROLE_KEY` | Edge Function 内で RLS をバイパス | GitHub Secrets |
+| 変数名 | 用途 | ローカル | Vercel | GitHub Secrets |
+|---|---|---|---|---|
+| `VITE_SUPABASE_URL` | Supabase プロジェクト URL | `.env` | ✅ 要登録 | — |
+| `VITE_SUPABASE_ANON_KEY` | Supabase 匿名キー（RLS 適用） | `.env` | ✅ 要登録 | — |
+| `SUPABASE_URL` | バッチ Edge Function 呼び出し用 URL | — | — | ✅ 要登録 |
+| `SUPABASE_SERVICE_ROLE_KEY` | Edge Function 内で RLS をバイパス | — | — | ✅ 要登録 |
+
+**Vercel への登録手順**: ダッシュボード → プロジェクト → Settings → Environment Variables
+（`VITE_` プレフィックスの変数は Vite がビルド時にバンドルに埋め込む。anon キーのみ使用すること）
 
 ---
 

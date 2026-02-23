@@ -244,6 +244,21 @@ MVPとして以下の流れを実現:
 
 ## 運用観点
 
+### デプロイ（Vercel）
+
+フロントエンドは **Vercel** でホスティングする。
+
+**初回セットアップ**:
+1. GitHub リポジトリを Vercel プロジェクトに連携
+2. Vercel ダッシュボード → Settings → Environment Variables に登録:
+   - `VITE_SUPABASE_URL`
+   - `VITE_SUPABASE_ANON_KEY`
+3. Framework Preset: Vite（自動検出）、Build: `npm run build`、Output: `dist`
+
+**継続デプロイ**:
+- `main` ブランチへの push → Vercel が自動ビルド・デプロイ
+- Pull Request → プレビューデプロイ URL を自動発行
+
 ### 設定の集約
 将来的に以下を `src/config.ts` に集約:
 - 問い合わせURL

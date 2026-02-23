@@ -340,15 +340,32 @@ apikey: {anon_key}
 }
 ```
 
-#### ファイルURL取得
+#### 署名付きURL取得
 
-**GET** `/storage/v1/object/public/documents/{user_id}/{filename}`
+**POST** `/storage/v1/object/sign/documents/{user_id}/{filename}`
 
-**認証**: 不要（publicバケット）
+**認証**: 必要（`documents` バケットは private）
 
-**説明**: アップロードした画像のURLを取得
+**説明**: アップロードした画像への時限付きアクセスURLを発行する。
+有効期限は 3600 秒（1時間）。期限切れ後は再発行が必要。
 
-**レスポンス**: 画像ファイル
+**リクエスト例（Supabase クライアント）**:
+```typescript
+const { data, error } = await supabase.storage
+  .from('documents')
+  .createSignedUrl(objectKey, 3600);
+// data.signedUrl を <img src> に渡す
+```
+
+**レスポンス例**:
+```json
+{
+  "signedURL": "https://ckdofopojlxqdnerxmdk.supabase.co/storage/v1/object/sign/documents/..."
+}
+```
+
+> **注意**: DB の `documents.image_url` にはオブジェクトキー（パス）のみ保存する。
+> 公開URL・署名付きURL を DB に保存してはならない。
 
 ---
 
