@@ -24,3 +24,6 @@ dist-ssr
 
 # Supabase CLI が生成するキャッシュ（接続情報を含むため除外）
 supabase/.temp/
+
+# Claude Code プロジェクトファイル（セッション履歴・メモリを含むため除外）
+.claude/
