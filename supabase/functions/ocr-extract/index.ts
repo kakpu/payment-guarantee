@@ -78,28 +78,44 @@ function extractAddress(text: string): string | null {
 // Vision API のフルテキストから生年月日を抽出し YYYY-MM-DD 形式で返す
 // 和暦（昭和・平成・令和等）と西暦の両方に対応
 function extractBirthDate(text: string): string | null {
-  // 和暦パターン: 生年月日 昭和55年1月1日
-  // 元号年は 1〜2桁（令和1年〜 / 昭和63年まで）、月日も 1〜2桁に限定
-  const jpMatch = text.match(
-    /生[　\s]*年[　\s]*月[　\s]*日[　\s]*(明治|大正|昭和|平成|令和)[　\s]*(\d{1,2})[　\s]*年[　\s]*(\d{1,2})[　\s]*月[　\s]*(\d{1,2})[　\s]*日/u,
+  // パターン1（主）: 元号 + 年月日 + 「生」サフィックス
+  // 運転免許証・マイナンバーカード共通の実際の形式
+  // 例: 平成7年4月30日生、昭和55年1月1日生
+  // ※「日生年」は「生年月日」ラベルの冒頭と区別するため除外
+  const suffixMatch = text.match(
+    /(明治|大正|昭和|平成|令和)[　\s]*(\d{1,2})[　\s]*年[　\s]*(\d{1,2})[　\s]*月[　\s]*(\d{1,2})[　\s]*日[　\s]*生(?!年)/u,
   );
-  if (jpMatch) {
-    const offset = ERA_OFFSETS[jpMatch[1]];
+  if (suffixMatch) {
+    const offset = ERA_OFFSETS[suffixMatch[1]];
     if (offset === undefined) return null;
-    const year = offset + parseInt(jpMatch[2]);
-    const month = String(parseInt(jpMatch[3])).padStart(2, '0');
-    const day = String(parseInt(jpMatch[4])).padStart(2, '0');
+    const year = offset + parseInt(suffixMatch[2]);
+    const month = String(parseInt(suffixMatch[3])).padStart(2, '0');
+    const day = String(parseInt(suffixMatch[4])).padStart(2, '0');
     return `${year}-${month}-${day}`;
   }
 
-  // 西暦パターン: 生年月日 1990年1月1日（年は4桁固定）
-  const adMatch = text.match(
+  // パターン2（フォールバック）: 「生年月日」ラベル + 和暦
+  // OCR が「生年月日」ラベルをそのまま出力した場合
+  const labelJpMatch = text.match(
+    /生[　\s]*年[　\s]*月[　\s]*日[　\s]*(明治|大正|昭和|平成|令和)[　\s]*(\d{1,2})[　\s]*年[　\s]*(\d{1,2})[　\s]*月[　\s]*(\d{1,2})[　\s]*日/u,
+  );
+  if (labelJpMatch) {
+    const offset = ERA_OFFSETS[labelJpMatch[1]];
+    if (offset === undefined) return null;
+    const year = offset + parseInt(labelJpMatch[2]);
+    const month = String(parseInt(labelJpMatch[3])).padStart(2, '0');
+    const day = String(parseInt(labelJpMatch[4])).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  // パターン3（フォールバック）: 「生年月日」ラベル + 西暦
+  const labelAdMatch = text.match(
     /生[　\s]*年[　\s]*月[　\s]*日[　\s]*(\d{4})[　\s]*年[　\s]*(\d{1,2})[　\s]*月[　\s]*(\d{1,2})[　\s]*日/u,
   );
-  if (adMatch) {
-    const month = String(parseInt(adMatch[2])).padStart(2, '0');
-    const day = String(parseInt(adMatch[3])).padStart(2, '0');
-    return `${adMatch[1]}-${month}-${day}`;
+  if (labelAdMatch) {
+    const month = String(parseInt(labelAdMatch[2])).padStart(2, '0');
+    const day = String(parseInt(labelAdMatch[3])).padStart(2, '0');
+    return `${labelAdMatch[1]}-${month}-${day}`;
   }
 
   return null;
