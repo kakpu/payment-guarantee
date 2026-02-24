@@ -1,12 +1,16 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
-import { Upload, FileText, CheckCircle, AlertCircle, Scan } from 'lucide-react';
+import { Upload, FileText, AlertCircle, Scan } from 'lucide-react';
 
 type DocumentType = 'mynumber_card' | 'drivers_license';
 
-export function UploadDocument() {
+interface Props {
+  onUploadComplete: (documentId: string) => void;
+}
+
+export function UploadDocument({ onUploadComplete }: Props) {
   const { user } = useAuth();
   const { showSuccess } = useToast();
   const [documentType, setDocumentType] = useState<DocumentType>('mynumber_card');
@@ -15,28 +19,39 @@ export function UploadDocument() {
   const [uploading, setUploading] = useState(false);
   // OCR 処理中フラグ（アップロード完了後に Edge Function を呼び出す間）
   const [runningOcr, setRunningOcr] = useState(false);
-  const [success, setSuccess] = useState(false);
   const [error, setError] = useState('');
+
+  // Object URL のメモリ解放（ファイル変更・コンポーネントアンマウント時）
+  const previewUrlRef = useRef<string | null>(null);
+  useEffect(() => {
+    return () => {
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    };
+  }, []);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
-    if (selectedFile) {
-      if (!selectedFile.type.startsWith('image/')) {
-        setError('画像ファイルを選択してください');
-        return;
-      }
-      if (selectedFile.size > 5 * 1024 * 1024) {
-        setError('ファイルサイズは5MB以下にしてください');
-        return;
-      }
-      setFile(selectedFile);
-      setError('');
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setPreview(reader.result as string);
-      };
-      reader.readAsDataURL(selectedFile);
+    if (!selectedFile) return;
+
+    if (!selectedFile.type.startsWith('image/')) {
+      setError('画像ファイルを選択してください');
+      return;
     }
+    if (selectedFile.size > 5 * 1024 * 1024) {
+      setError('ファイルサイズは5MB以下にしてください');
+      return;
+    }
+
+    // 前の Object URL を解放してからプレビュー用 URL を生成
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+
+    // URL.createObjectURL は同期的なため、選択直後に即時プレビュー表示される
+    const objectUrl = URL.createObjectURL(selectedFile);
+    previewUrlRef.current = objectUrl;
+
+    setFile(selectedFile);
+    setPreview(objectUrl);
+    setError('');
   };
 
   const handleUpload = async () => {
@@ -44,7 +59,6 @@ export function UploadDocument() {
 
     setUploading(true);
     setError('');
-    setSuccess(false);
 
     try {
       const fileExt = file.name.split('.').pop();
@@ -126,13 +140,8 @@ export function UploadDocument() {
         setRunningOcr(false);
       }
 
-      setSuccess(true);
-      setFile(null);
-      setPreview(null);
-
-      setTimeout(() => {
-        setSuccess(false);
-      }, 3000);
+      // 完了後に書類詳細ページへ遷移（OCR 結果の確認・手動補正のため）
+      onUploadComplete(document.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'アップロードに失敗しました');
     } finally {
@@ -197,7 +206,11 @@ export function UploadDocument() {
             <label className="block text-sm font-medium text-gray-700 mb-3">
               画像ファイル
             </label>
-            <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-400 transition">
+            <div className={`border-2 border-dashed rounded-lg p-8 text-center transition ${
+              file
+                ? 'border-blue-400 bg-blue-50'
+                : 'border-gray-300 hover:border-blue-400'
+            }`}>
               <input
                 type="file"
                 accept="image/*"
@@ -206,13 +219,26 @@ export function UploadDocument() {
                 id="file-upload"
               />
               <label htmlFor="file-upload" className="cursor-pointer">
-                <Upload className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                <p className="text-gray-700 font-medium mb-1">
-                  クリックしてファイルを選択
-                </p>
-                <p className="text-sm text-gray-500">
-                  PNG, JPG, JPEG (最大5MB)
-                </p>
+                <Upload className={`w-12 h-12 mx-auto mb-4 ${
+                  file ? 'text-blue-500' : 'text-gray-400'
+                }`} />
+                {file ? (
+                  <>
+                    <p className="text-blue-700 font-medium mb-1">{file.name}</p>
+                    <p className="text-sm text-blue-500">
+                      {(file.size / 1024 / 1024).toFixed(2)} MB — クリックして変更
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-gray-700 font-medium mb-1">
+                      クリックしてファイルを選択
+                    </p>
+                    <p className="text-sm text-gray-500">
+                      PNG, JPG, JPEG (最大5MB)
+                    </p>
+                  </>
+                )}
               </label>
             </div>
           </div>
@@ -239,13 +265,6 @@ export function UploadDocument() {
             </div>
           )}
 
-          {success && (
-            <div className="flex items-center gap-2 bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg">
-              <CheckCircle className="w-5 h-5" />
-              <span className="text-sm">アップロードが完了しました</span>
-            </div>
-          )}
-
           <button
             onClick={handleUpload}
             disabled={!file || uploading || runningOcr}
@@ -254,12 +273,12 @@ export function UploadDocument() {
             {uploading ? (
               <>
                 <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                <span>アップロード中...</span>
+                <span>① ファイル送信中...</span>
               </>
             ) : runningOcr ? (
               <>
                 <Scan className="w-5 h-5 animate-pulse" />
-                <span>OCR 処理中...</span>
+                <span>② OCR 解析中...</span>
               </>
             ) : (
               <>

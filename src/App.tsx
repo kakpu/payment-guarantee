@@ -20,6 +20,11 @@ function AppContent() {
     setSelectedDocumentId(null);
   };
 
+  const handleUploadComplete = (id: string) => {
+    setSelectedDocumentId(id);
+    setCurrentPage('document-detail');
+  };
+
   const handleViewDocument = (id: string) => {
     setSelectedDocumentId(id);
     setCurrentPage('document-detail');
@@ -45,7 +50,7 @@ function AppContent() {
   return (
     <Layout currentPage={currentPage === 'document-detail' ? 'documents' : currentPage} onNavigate={handleNavigate}>
       {currentPage === 'dashboard' && <Dashboard />}
-      {currentPage === 'upload' && <UploadDocument />}
+      {currentPage === 'upload' && <UploadDocument onUploadComplete={handleUploadComplete} />}
       {currentPage === 'documents' && <DocumentList onViewDocument={handleViewDocument} />}
       {currentPage === 'document-detail' && selectedDocumentId && (
         <DocumentDetail documentId={selectedDocumentId} onBack={handleBackFromDetail} />
