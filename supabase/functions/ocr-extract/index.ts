@@ -1,4 +1,4 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 
 // ブラウザからの直接呼び出しに必要な CORS ヘッダー
 const corsHeaders = {
@@ -98,191 +98,226 @@ Deno.serve(async (req) => {
     return new Response('ok', { headers: corsHeaders });
   }
 
-  if (req.method !== 'POST') {
-    return new Response('Method Not Allowed', { status: 405, headers: corsHeaders });
-  }
-
-  const authHeader = req.headers.get('Authorization');
-  if (!authHeader) {
-    return new Response(
-      JSON.stringify({ success: false, error: 'UNAUTHORIZED' }),
-      { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-    );
-  }
-
-  // リクエストボディを先に読んでおく（catch ブロックで再利用不可のため）
-  let documentId: string;
+  // 予期せぬエラーによる EarlyDrop を防ぐためにハンドラ全体を try-catch で包む
   try {
-    const body = await req.json();
-    documentId = body.document_id;
-  } catch {
-    return new Response(
-      JSON.stringify({ success: false, error: 'INVALID_REQUEST' }),
-      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-    );
-  }
+    console.log('[ocr-extract] リクエスト開始:', req.method);
 
-  if (!documentId) {
-    return new Response(
-      JSON.stringify({ success: false, error: 'MISSING_DOCUMENT_ID' }),
-      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-    );
-  }
+    if (req.method !== 'POST') {
+      return new Response('Method Not Allowed', { status: 405, headers: corsHeaders });
+    }
 
-  const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
-  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-  const anonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
-  const visionApiKey = Deno.env.get('GOOGLE_VISION_API_KEY') ?? '';
-
-  if (!visionApiKey) {
-    console.error('GOOGLE_VISION_API_KEY が未設定です');
-    return new Response(
-      JSON.stringify({ success: false, fallback: true, error: 'OCR_NOT_CONFIGURED' }),
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-    );
-  }
-
-  // ユーザートークンで Supabase クライアントを作成（書類の所有権チェック用）
-  const userClient = createClient(supabaseUrl, anonKey, {
-    global: { headers: { Authorization: authHeader } },
-  });
-  // service_role クライアント（Storage 署名付きURL 発行・DB 書き込み用）
-  const adminClient = createClient(supabaseUrl, serviceRoleKey);
-
-  try {
-    // ユーザーが所有する書類か確認（RLS によって他ユーザーの書類は取得されない）
-    const { data: doc, error: docError } = await userClient
-      .from('documents')
-      .select('id, image_url, document_type')
-      .eq('id', documentId)
-      .single();
-
-    if (docError || !doc) {
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader) {
+      console.error('[ocr-extract] 認証ヘッダーなし');
       return new Response(
-        JSON.stringify({ success: false, error: 'DOCUMENT_NOT_FOUND' }),
-        { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        JSON.stringify({ success: false, error: 'UNAUTHORIZED' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      );
+    }
+    console.log('[ocr-extract] 認証ヘッダー確認済み');
+
+    // リクエストボディを先に読んでおく（catch ブロックで再利用不可のため）
+    let documentId: string;
+    try {
+      const body = await req.json();
+      documentId = body.document_id;
+      console.log('[ocr-extract] リクエスト解析完了: document_id=', documentId);
+    } catch (parseErr) {
+      console.error('[ocr-extract] ボディ解析エラー:', parseErr);
+      return new Response(
+        JSON.stringify({ success: false, error: 'INVALID_REQUEST' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       );
     }
 
-    // OCR 処理中ステータスへ更新
-    await adminClient
-      .from('documents')
-      .update({ status: 'ocr_processing', updated_at: new Date().toISOString() })
-      .eq('id', documentId);
-
-    // Storage から短期署名付きURL を発行（Vision API 呼び出しの間だけ有効な 60 秒）
-    const { data: signedData, error: signedError } = await adminClient.storage
-      .from('documents')
-      .createSignedUrl(doc.image_url, 60);
-
-    if (signedError || !signedData?.signedUrl) {
-      throw new Error('署名付きURL の発行に失敗しました');
+    if (!documentId) {
+      console.error('[ocr-extract] document_id が未指定');
+      return new Response(
+        JSON.stringify({ success: false, error: 'MISSING_DOCUMENT_ID' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      );
     }
 
-    // 署名付きURL から画像を取得し Base64 に変換
-    const imageResponse = await fetch(signedData.signedUrl);
-    if (!imageResponse.ok) {
-      throw new Error(`画像の取得に失敗しました: ${imageResponse.status}`);
-    }
-    const imageBuffer = await imageResponse.arrayBuffer();
-    const base64Image = arrayBufferToBase64(imageBuffer);
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+    const anonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
+    const visionApiKey = Deno.env.get('GOOGLE_VISION_API_KEY') ?? '';
 
-    // Google Cloud Vision API（DOCUMENT_TEXT_DETECTION）を呼び出す
-    const visionResponse = await fetch(
-      `https://vision.googleapis.com/v1/images:annotate?key=${visionApiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          requests: [
-            {
-              image: { content: base64Image },
-              features: [{ type: 'DOCUMENT_TEXT_DETECTION', maxResults: 1 }],
-            },
-          ],
+    console.log('[ocr-extract] 環境変数確認: supabaseUrl=', supabaseUrl ? '設定済み' : '未設定');
+    console.log('[ocr-extract] 環境変数確認: serviceRoleKey=', serviceRoleKey ? '設定済み' : '未設定');
+    console.log('[ocr-extract] 環境変数確認: anonKey=', anonKey ? '設定済み' : '未設定');
+    console.log('[ocr-extract] 環境変数確認: visionApiKey=', visionApiKey ? '設定済み' : '未設定');
+
+    if (!visionApiKey) {
+      console.error('[ocr-extract] GOOGLE_VISION_API_KEY が未設定');
+      return new Response(
+        JSON.stringify({ success: false, fallback: true, error: 'OCR_NOT_CONFIGURED' }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      );
+    }
+
+    // ユーザートークンで Supabase クライアントを作成（書類の所有権チェック用）
+    const userClient = createClient(supabaseUrl, anonKey, {
+      global: { headers: { Authorization: authHeader } },
+    });
+    // service_role クライアント（Storage 署名付きURL 発行・DB 書き込み用）
+    const adminClient = createClient(supabaseUrl, serviceRoleKey);
+    console.log('[ocr-extract] Supabase クライアント作成完了');
+
+    try {
+      // ユーザーが所有する書類か確認（RLS によって他ユーザーの書類は取得されない）
+      const { data: doc, error: docError } = await userClient
+        .from('documents')
+        .select('id, image_url, document_type')
+        .eq('id', documentId)
+        .single();
+
+      if (docError || !doc) {
+        console.error('[ocr-extract] 書類取得エラー:', docError?.message ?? '書類なし');
+        return new Response(
+          JSON.stringify({ success: false, error: 'DOCUMENT_NOT_FOUND' }),
+          { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        );
+      }
+      console.log('[ocr-extract] 書類取得完了: document_type=', doc.document_type);
+
+      // OCR 処理中ステータスへ更新
+      await adminClient
+        .from('documents')
+        .update({ status: 'ocr_processing', updated_at: new Date().toISOString() })
+        .eq('id', documentId);
+      console.log('[ocr-extract] ステータスを ocr_processing に更新');
+
+      // Storage から短期署名付きURL を発行（Vision API 呼び出しの間だけ有効な 60 秒）
+      const { data: signedData, error: signedError } = await adminClient.storage
+        .from('documents')
+        .createSignedUrl(doc.image_url, 60);
+
+      if (signedError || !signedData?.signedUrl) {
+        throw new Error(`署名付きURL の発行に失敗しました: ${signedError?.message ?? '不明'}`);
+      }
+      console.log('[ocr-extract] 署名付きURL 発行完了');
+
+      // 署名付きURL から画像を取得し Base64 に変換
+      const imageResponse = await fetch(signedData.signedUrl);
+      if (!imageResponse.ok) {
+        throw new Error(`画像の取得に失敗しました: ${imageResponse.status}`);
+      }
+      const imageBuffer = await imageResponse.arrayBuffer();
+      console.log('[ocr-extract] 画像取得完了: サイズ=', imageBuffer.byteLength, 'bytes');
+
+      const base64Image = arrayBufferToBase64(imageBuffer);
+      console.log('[ocr-extract] Base64 変換完了: 長さ=', base64Image.length);
+
+      // Google Cloud Vision API（DOCUMENT_TEXT_DETECTION）を呼び出す
+      console.log('[ocr-extract] Vision API 呼び出し開始');
+      const visionResponse = await fetch(
+        `https://vision.googleapis.com/v1/images:annotate?key=${visionApiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            requests: [
+              {
+                image: { content: base64Image },
+                features: [{ type: 'DOCUMENT_TEXT_DETECTION', maxResults: 1 }],
+              },
+            ],
+          }),
+        },
+      );
+      console.log('[ocr-extract] Vision API レスポンス: status=', visionResponse.status);
+
+      // 月次無料枠（1,000 ユニット）超過時はフォールバック
+      if (visionResponse.status === 429) {
+        await handleOcrFailure(adminClient, documentId, 'OCR_RATE_LIMIT_EXCEEDED');
+        return new Response(
+          JSON.stringify({ success: false, fallback: true, error: 'OCR_RATE_LIMIT_EXCEEDED' }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        );
+      }
+
+      if (!visionResponse.ok) {
+        const errBody = await visionResponse.text();
+        throw new Error(`Vision API エラー: status=${visionResponse.status}, body=${errBody.slice(0, 200)}`);
+      }
+
+      const visionData = await visionResponse.json();
+      const fullText: string = visionData.responses?.[0]?.fullTextAnnotation?.text ?? '';
+      console.log('[ocr-extract] テキスト検出: 文字数=', fullText.length);
+
+      if (!fullText) {
+        await handleOcrFailure(adminClient, documentId, 'テキストが検出されませんでした');
+        return new Response(
+          JSON.stringify({ success: false, fallback: true, error: 'OCR_NO_TEXT' }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        );
+      }
+
+      // テキストから各フィールドを抽出（個人情報はログに出力しない）
+      const name = extractName(fullText);
+      const birthDate = extractBirthDate(fullText);
+      const address = extractAddress(fullText);
+      console.log('[ocr-extract] フィールド抽出完了: name=', name ? '取得' : 'null', ', birthDate=', birthDate ? '取得' : 'null', ', address=', address ? '取得' : 'null');
+      const now = new Date().toISOString();
+
+      // document_data を OCR 結果で更新
+      const { error: upsertError } = await adminClient
+        .from('document_data')
+        .update({
+          name: name ?? '',
+          birth_date: birthDate ?? null,
+          address: address ?? '',
+          ocr_executed_at: now,
+          ocr_error_message: null,
+          updated_at: now,
+        })
+        .eq('document_id', documentId);
+
+      if (upsertError) throw new Error(`document_data 更新エラー: ${upsertError.message}`);
+
+      // ステータスを ocr_completed へ更新
+      await adminClient
+        .from('documents')
+        .update({ status: 'ocr_completed', updated_at: now })
+        .eq('id', documentId);
+
+      // 操作履歴に OCR 抽出完了を記録（抽出値はログに出力しない）
+      const { data: { user } } = await userClient.auth.getUser();
+      if (user) {
+        await adminClient.from('document_history').insert({
+          document_id: documentId,
+          operator_id: user.id,
+          action: 'ocr_extracted',
+          changes: { extracted_fields: ['name', 'birth_date', 'address'] },
+        });
+      }
+
+      console.log('[ocr-extract] OCR 完了: document_id=', documentId);
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          data: { name, birth_date: birthDate, address },
         }),
-      },
-    );
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '不明なエラー';
+      console.error('[ocr-extract] OCR 処理エラー:', message);
 
-    // 月次無料枠（1,000 ユニット）超過時はフォールバック
-    if (visionResponse.status === 429) {
-      await handleOcrFailure(adminClient, documentId, 'OCR_RATE_LIMIT_EXCEEDED');
+      await handleOcrFailure(adminClient, documentId, message);
+
       return new Response(
-        JSON.stringify({ success: false, fallback: true, error: 'OCR_RATE_LIMIT_EXCEEDED' }),
+        JSON.stringify({ success: false, fallback: true, error: 'OCR_API_ERROR' }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       );
     }
-
-    if (!visionResponse.ok) {
-      throw new Error(`Vision API エラー: ${visionResponse.status}`);
-    }
-
-    const visionData = await visionResponse.json();
-    const fullText: string = visionData.responses?.[0]?.fullTextAnnotation?.text ?? '';
-
-    if (!fullText) {
-      await handleOcrFailure(adminClient, documentId, 'テキストが検出されませんでした');
-      return new Response(
-        JSON.stringify({ success: false, fallback: true, error: 'OCR_NO_TEXT' }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-      );
-    }
-
-    // テキストから各フィールドを抽出（個人情報はログに出力しない）
-    const name = extractName(fullText);
-    const birthDate = extractBirthDate(fullText);
-    const address = extractAddress(fullText);
-    const now = new Date().toISOString();
-
-    // document_data を OCR 結果で更新
-    const { error: upsertError } = await adminClient
-      .from('document_data')
-      .update({
-        name: name ?? '',
-        birth_date: birthDate ?? null,
-        address: address ?? '',
-        ocr_executed_at: now,
-        ocr_error_message: null,
-        updated_at: now,
-      })
-      .eq('document_id', documentId);
-
-    if (upsertError) throw new Error(`document_data 更新エラー: ${upsertError.message}`);
-
-    // ステータスを ocr_completed へ更新
-    await adminClient
-      .from('documents')
-      .update({ status: 'ocr_completed', updated_at: now })
-      .eq('id', documentId);
-
-    // 操作履歴に OCR 抽出完了を記録（抽出値はログに出力しない）
-    const { data: { user } } = await userClient.auth.getUser();
-    if (user) {
-      await adminClient.from('document_history').insert({
-        document_id: documentId,
-        operator_id: user.id,
-        action: 'ocr_extracted',
-        changes: { extracted_fields: ['name', 'birth_date', 'address'] },
-      });
-    }
-
-    console.log(`OCR 完了: document_id=${documentId}`);
-
+  } catch (topErr) {
+    // ハンドラ全体の予期せぬ例外をキャッチして EarlyDrop を防ぐ
+    console.error('[ocr-extract] 予期せぬトップレベルエラー:', topErr instanceof Error ? topErr.message : String(topErr));
     return new Response(
-      JSON.stringify({
-        success: true,
-        data: { name, birth_date: birthDate, address },
-      }),
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-    );
-  } catch (err) {
-    const message = err instanceof Error ? err.message : '不明なエラー';
-    console.error('OCR 処理エラー:', message);
-
-    await handleOcrFailure(adminClient, documentId, message);
-
-    return new Response(
-      JSON.stringify({ success: false, fallback: true, error: 'OCR_API_ERROR' }),
+      JSON.stringify({ success: false, fallback: true, error: 'UNEXPECTED_ERROR' }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   }
