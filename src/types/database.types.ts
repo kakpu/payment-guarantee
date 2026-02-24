@@ -48,6 +48,7 @@ export type Database = {
           birth_date: string | null
           address: string
           ocr_executed_at: string | null
+          ocr_error_message: string | null
           created_at: string
           updated_at: string
         }
@@ -58,6 +59,7 @@ export type Database = {
           birth_date?: string | null
           address?: string
           ocr_executed_at?: string | null
+          ocr_error_message?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -68,6 +70,7 @@ export type Database = {
           birth_date?: string | null
           address?: string
           ocr_executed_at?: string | null
+          ocr_error_message?: string | null
           created_at?: string
           updated_at?: string
         }

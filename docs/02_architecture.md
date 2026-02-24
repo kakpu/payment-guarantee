@@ -8,6 +8,7 @@
 - **認証**: Supabase Auth (Email/Password)
 - **フロントエンドホスティング**: Vercel（CDN・自動デプロイ）
 - **バッチ実行基盤**: Supabase Cloud + GitHub Actions
+- **AI OCR**: Google Cloud Vision API（DOCUMENT_TEXT_DETECTION・無料枠 1,000 ユニット/月）
 - **UI アイコン**: Lucide React
 
 ## システム構成図
@@ -36,9 +37,9 @@ graph TB
         Cron[定期実行 JST 20:00]
     end
 
-    subgraph External["外部サービス（将来）"]
-        OCR[OCR API]
-        Batch[代弁実行システム]
+    subgraph External["外部サービス"]
+        OCR[Google Cloud Vision API]
+        Batch[代弁実行システム（将来）]
     end
 
     Client -->|HTTPS| CDN
@@ -114,7 +115,25 @@ graph TB
                       document_history 記録
 ```
 
-### 3. 書類確認フロー
+### 3. OCR 処理フロー
+```
+アップロード完了 → UploadDocument → OCR Edge Function（ocr-extract）
+                                          ↓
+                              Storage 署名付きURL 発行（60秒）
+                                          ↓
+                              Google Cloud Vision API 呼び出し
+                                          ↓
+                              氏名・生年月日・住所をパース
+                                          ↓
+                    ┌─────────────────────────────────────┐
+                    │ 成功                    │ 失敗（429/エラー）  │
+                    ↓                         ↓
+             document_data 更新       status を 'uploaded' に戻す
+             status → ocr_completed   ocr_error_message を記録
+                                      Toast でエラー表示（手動入力へ）
+```
+
+### 4. 書類確認フロー
 ```
 書類一覧 → DocumentList → createSignedUrl（有効期限1時間）
                                ↓
@@ -244,7 +263,7 @@ CREATE POLICY "Users can upload their own documents"
 ## 拡張性
 
 ### 短期的な拡張
-1. OCR API 統合（Edge Functions 経由）
+1. ~~OCR API 統合（Edge Functions 経由）~~ → **Phase 6 で実装済み**
 2. 画像プレビュー機能の強化
 
 ### 長期的な拡張

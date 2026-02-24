@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
-import { Upload, FileText, CheckCircle, AlertCircle } from 'lucide-react';
+import { Upload, FileText, CheckCircle, AlertCircle, Scan } from 'lucide-react';
 
 type DocumentType = 'mynumber_card' | 'drivers_license';
 
@@ -13,6 +13,8 @@ export function UploadDocument() {
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  // OCR 処理中フラグ（アップロード完了後に Edge Function を呼び出す間）
+  const [runningOcr, setRunningOcr] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState('');
 
@@ -83,10 +85,34 @@ export function UploadDocument() {
         changes: {},
       });
 
+      setUploading(false);
+
+      // アップロード完了後、OCR Edge Function を呼び出す
+      setRunningOcr(true);
+      try {
+        const { data: ocrResult, error: ocrError } = await supabase.functions.invoke(
+          'ocr-extract',
+          { body: { document_id: document.id } },
+        );
+
+        if (ocrError) throw ocrError;
+
+        if (ocrResult?.fallback) {
+          // 上限超過・API エラー時は手動入力を促す
+          showSuccess('アップロード完了。OCR が利用できないため手動で入力してください');
+        } else {
+          showSuccess('アップロード・OCR 抽出が完了しました');
+        }
+      } catch {
+        // OCR 失敗はアップロード自体の成功には影響しない
+        showSuccess('アップロード完了。OCR に失敗したため手動で入力してください');
+      } finally {
+        setRunningOcr(false);
+      }
+
       setSuccess(true);
       setFile(null);
       setPreview(null);
-      showSuccess('アップロードが完了しました');
 
       setTimeout(() => {
         setSuccess(false);
@@ -95,6 +121,7 @@ export function UploadDocument() {
       setError(err instanceof Error ? err.message : 'アップロードに失敗しました');
     } finally {
       setUploading(false);
+      setRunningOcr(false);
     }
   };
 
@@ -205,13 +232,18 @@ export function UploadDocument() {
 
           <button
             onClick={handleUpload}
-            disabled={!file || uploading}
+            disabled={!file || uploading || runningOcr}
             className="w-full bg-blue-600 text-white py-3 rounded-lg font-medium hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
           >
             {uploading ? (
               <>
                 <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
                 <span>アップロード中...</span>
+              </>
+            ) : runningOcr ? (
+              <>
+                <Scan className="w-5 h-5 animate-pulse" />
+                <span>OCR 処理中...</span>
               </>
             ) : (
               <>

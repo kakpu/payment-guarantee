@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
-import { ArrowLeft, Save, CheckCircle, XCircle, History, ZoomIn, RotateCw, ImageOff } from 'lucide-react';
+import { ArrowLeft, Save, CheckCircle, XCircle, History, ZoomIn, RotateCw, ImageOff, Scan } from 'lucide-react';
 
 interface DocumentDetailProps {
   documentId: string;
@@ -27,7 +27,7 @@ interface HistoryItem {
   action: string;
   created_at: string;
   operator_id: string;
-  changes: any;
+  changes: unknown;
 }
 
 export function DocumentDetail({ documentId, onBack }: DocumentDetailProps) {
@@ -44,6 +44,8 @@ export function DocumentDetail({ documentId, onBack }: DocumentDetailProps) {
   const [signedImageUrl, setSignedImageUrl] = useState<string | null>(null);
   // 署名付きURL取得失敗フラグ
   const [imageLoadFailed, setImageLoadFailed] = useState(false);
+  // OCR 処理中のポーリングタイマー参照
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -54,6 +56,10 @@ export function DocumentDetail({ documentId, onBack }: DocumentDetailProps) {
   useEffect(() => {
     loadDocument();
     loadHistory();
+    return () => {
+      // アンマウント時にポーリングを停止する
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+    };
   }, [documentId]);
 
   const loadDocument = async () => {
@@ -86,6 +92,16 @@ export function DocumentDetail({ documentId, onBack }: DocumentDetailProps) {
         address: docData?.address || '',
       });
 
+      // OCR 処理中ならポーリングを開始し、完了したら停止する
+      if (doc.status === 'ocr_processing') {
+        startPolling();
+      } else {
+        if (pollTimerRef.current) {
+          clearInterval(pollTimerRef.current);
+          pollTimerRef.current = null;
+        }
+      }
+
       // privateバケットのため署名付きURLを生成する（有効期限1時間）
       const { data: signedData, error: signedError } = await supabase.storage
         .from('documents')
@@ -101,6 +117,26 @@ export function DocumentDetail({ documentId, onBack }: DocumentDetailProps) {
     } finally {
       setLoading(false);
     }
+  };
+
+  // OCR 処理中に 3 秒間隔でステータスをポーリングする
+  const startPolling = () => {
+    if (pollTimerRef.current) return; // 二重起動防止
+    pollTimerRef.current = setInterval(async () => {
+      const { data: doc } = await supabase
+        .from('documents')
+        .select('status')
+        .eq('id', documentId)
+        .single();
+
+      if (doc && doc.status !== 'ocr_processing') {
+        clearInterval(pollTimerRef.current!);
+        pollTimerRef.current = null;
+        // ステータスが変わったらドキュメント全体を再読み込みする
+        await loadDocument();
+        await loadHistory();
+      }
+    }, 3000);
   };
 
   const loadHistory = async () => {
@@ -245,6 +281,9 @@ export function DocumentDetail({ documentId, onBack }: DocumentDetailProps) {
 
   const isConfirmed = document.status === 'confirmed';
   const isRejected = document.status === 'rejected';
+  // OCR 処理中はフォームを編集不可にする
+  const isOcrProcessing = document.status === 'ocr_processing';
+  const isFormDisabled = isConfirmed || isRejected || isOcrProcessing;
 
   return (
     <div className="space-y-6">
@@ -262,6 +301,17 @@ export function DocumentDetail({ documentId, onBack }: DocumentDetailProps) {
           </p>
         </div>
       </div>
+
+      {/* OCR 処理中バナー */}
+      {isOcrProcessing && (
+        <div className="bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded-lg flex items-center gap-3">
+          <Scan className="w-5 h-5 animate-pulse shrink-0" />
+          <div>
+            <p className="font-medium">OCR 処理中...</p>
+            <p className="text-sm">氏名・生年月日・住所を自動抽出しています。完了後に自動で更新されます。</p>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="space-y-4">
@@ -347,7 +397,7 @@ export function DocumentDetail({ documentId, onBack }: DocumentDetailProps) {
                 type="text"
                 value={formData.name}
                 onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                disabled={isConfirmed || isRejected}
+                disabled={isFormDisabled}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100"
                 placeholder="山田 太郎"
               />
@@ -359,9 +409,9 @@ export function DocumentDetail({ documentId, onBack }: DocumentDetailProps) {
               </label>
               <input
                 type="date"
-                value={formData.birth_date}
+                value={formData.birth_date ?? ''}
                 onChange={(e) => setFormData({ ...formData, birth_date: e.target.value })}
-                disabled={isConfirmed || isRejected}
+                disabled={isFormDisabled}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100"
               />
             </div>
@@ -373,14 +423,14 @@ export function DocumentDetail({ documentId, onBack }: DocumentDetailProps) {
               <textarea
                 value={formData.address}
                 onChange={(e) => setFormData({ ...formData, address: e.target.value })}
-                disabled={isConfirmed || isRejected}
+                disabled={isFormDisabled}
                 rows={3}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100"
                 placeholder="東京都千代田区..."
               />
             </div>
 
-            {!isConfirmed && !isRejected && (
+            {!isFormDisabled && (
               <div className="space-y-3 pt-4">
                 <button
                   onClick={handleSave}
@@ -409,6 +459,13 @@ export function DocumentDetail({ documentId, onBack }: DocumentDetailProps) {
                     差戻し
                   </button>
                 </div>
+              </div>
+            )}
+
+            {isOcrProcessing && (
+              <div className="bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded-lg flex items-center gap-2">
+                <Scan className="w-5 h-5 animate-pulse" />
+                <span className="font-medium">OCR 処理完了後に入力できます</span>
               </div>
             )}
 

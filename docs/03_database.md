@@ -65,9 +65,10 @@ CREATE TABLE document_data (
   name             TEXT,                          -- 氏名（OCR抽出・未完了時はNULL）
   birth_date       DATE,                          -- 生年月日
   address          TEXT,                          -- 住所
-  ocr_executed_at  TIMESTAMPTZ,                   -- OCR実行日時（監査用）
-  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+  ocr_executed_at    TIMESTAMPTZ,                   -- OCR実行日時（監査用）
+  ocr_error_message  TEXT,                           -- OCR失敗時のエラーメッセージ（上限超過等）
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- RLS（documentsを経由してアクセス制御）

@@ -42,8 +42,24 @@ AI OCRで抽出した情報を確認・修正し、
 - 生年月日
 - 住所
 
+### ■ 使用サービス
+- **Google Cloud Vision API**（DOCUMENT_TEXT_DETECTION）
+- 無料枠：1,000 ユニット/月
+- 上限超過・API エラー時は**手動入力へフォールバック**（空欄で詳細画面を開く）
+
+### ■ OCR 処理フロー
+1. アップロード完了後、フロントエンドから OCR Edge Function を呼び出す
+2. Edge Function が Storage の署名付きURL を発行し、Vision API へ送信
+3. Vision API レスポンスから氏名・生年月日・住所をパース
+4. `document_data` を更新し、`documents.status` を `ocr_completed` へ変更
+5. 失敗時は `documents.status` を `uploaded` に戻し、`document_data.ocr_error_message` にエラー内容を記録
+
+### ■ フォールバック
+- 上限超過（HTTP 429）・API エラー時はエラーメッセージを Toast で表示
+- 書類詳細画面を空欄で開き、オペレーターが手動入力する
+
 ### ■ 画像保存方針
-- 書類画像はクラウド（例：AWS S3）へ保存
+- 書類画像は Supabase Storage（private バケット）へ保存
 - DBには画像リンク（オブジェクトキー）のみ保持
 
 ---
@@ -92,11 +108,12 @@ AI OCRで抽出した情報を確認・修正し、
 
 ---
 
-## 3.1 権限管理マスター
+## 3.1 権限管理マスター・再鑑機能
 
 - 業務別アクセス制御
 - ロール管理
-  - オペレーター
+  - オペレーター（書類アップロード・編集・確認）
+  - 再鑑者（他ユーザーの書類を再鑑・訂正コメント付き差戻し）
   - 管理者
   - 監査閲覧専用
 

@@ -452,20 +452,55 @@ Supabase Pro プランの制限:
 
 ---
 
-## 将来のAPI拡張予定
+## Edge Function エンドポイント
 
-### OCR処理エンドポイント
+### OCR 処理エンドポイント
 
 **POST** `/functions/v1/ocr-extract`
 
-**説明**: Edge Function経由でOCR APIを呼び出し
+**認証**: 必要（Authorization: Bearer {access_token}）
 
+**説明**: アップロード直後にフロントエンドから呼び出す。Storage から署名付きURL を発行し、
+Google Cloud Vision API（DOCUMENT_TEXT_DETECTION）で氏名・生年月日・住所を抽出する。
+上限超過（HTTP 429）・API エラー時はフォールバックとして `documents.status` を `uploaded` に戻す。
+
+**リクエスト**:
 ```json
 {
-  "document_id": "uuid",
-  "image_url": "https://..."
+  "document_id": "uuid"
 }
 ```
+
+**レスポンス（成功）**:
+```json
+{
+  "success": true,
+  "data": {
+    "name": "山田 太郎",
+    "birth_date": "1990-01-01",
+    "address": "東京都千代田区..."
+  }
+}
+```
+
+**レスポンス（フォールバック）**:
+```json
+{
+  "success": false,
+  "fallback": true,
+  "error": "OCR_RATE_LIMIT_EXCEEDED"
+}
+```
+
+**エラーコード**:
+| コード | 意味 |
+|---|---|
+| `OCR_RATE_LIMIT_EXCEEDED` | 月次無料枠（1,000 ユニット）超過 |
+| `OCR_API_ERROR` | Vision API の一時的なエラー |
+| `OCR_PARSE_ERROR` | テキスト抽出成功だが必要項目が見つからない |
+| `DOCUMENT_NOT_FOUND` | 指定した document_id が存在しない |
+
+---
 
 ### バッチエクスポートエンドポイント
 

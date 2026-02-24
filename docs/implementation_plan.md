@@ -15,7 +15,7 @@
 
 | # | 決定事項 | 内容 |
 |---|---|---|
-| 1 | OCR | **将来機能**とする。MVP では手動入力のみ |
+| 1 | OCR | **Phase 6** で実装。Google Cloud Vision API（無料枠 1,000 ユニット/月）、上限超過時は手動入力へフォールバック |
 | 2 | バッチ出力形式 | **CSV ファイル**を `batch-exports` Storage バケットへ保存 |
 | 3 | バッチ実行方法 | **GitHub Actions** cron（毎日 JST 20:00 = UTC 11:00） |
 | 4 | 書類画像の保管 | **プライベート Storage + 署名付きURL**（有効期限1時間） |
@@ -91,6 +91,27 @@
 | #12 | セキュリティ確認・受け入れテスト | RLS 検証・個人情報ログ確認・監査チェック |
 
 **完了条件**: エラー時に日本語メッセージが表示され、セキュリティ監査が完了する
+
+---
+
+### Phase 6 — AI OCR 統合
+
+| Issue | タイトル | 説明 |
+|---|---|---|
+| #13 | OCR Edge Function 実装 | `ocr-extract` Edge Function。Google Cloud Vision API 呼び出し・テキストパース・フォールバック処理 |
+| #14 | フロントエンド OCR ステータス対応 | アップロード後に自動 OCR 起動・処理中スピナー・OCR 結果のフォーム自動入力・フォールバック UI |
+
+**完了条件**: アップロード後に氏名・生年月日・住所が自動入力される。上限超過時は手動入力画面が開く
+
+**新規追加ファイル**:
+- `supabase/functions/ocr-extract/index.ts` — OCR Edge Function
+- `supabase/migrations/YYYYMMDD_add_ocr_error_message.sql` — `document_data.ocr_error_message` カラム追加
+
+**新規環境変数**:
+
+| 変数名 | 用途 | 設定場所 |
+|---|---|---|
+| `GOOGLE_VISION_API_KEY` | Google Cloud Vision API キー | Supabase Edge Function Secrets |
 
 ---
 
@@ -217,8 +238,8 @@ uploaded → (ocr_processing → ocr_completed) → confirmed
 
 | 機能 | 概要 |
 |---|---|
-| AI OCR 統合 | AWS Textract 等で氏名・生年月日・住所を自動抽出 |
-| 権限管理 | オペレーター / 管理者 / 監査閲覧専用のロール分離 |
+| ~~AI OCR 統合~~ | **Phase 6 で実装済み** |
+| 権限管理・再鑑機能 | オペレーター / 再鑑者 / 管理者 / 監査閲覧専用のロール分離（Phase 7 予定） |
 | 手動バッチ実行 | 管理者画面から任意タイミングでバッチ実行 |
 | リアルタイム連携 | バッチ CSV 方式から API リアルタイム連携への移行 |
 | 通知機能 | 新規アップロード通知・確認期限アラート |
