@@ -136,6 +136,7 @@ export function DocumentList({ onViewDocument }: DocumentListProps) {
         { value: 'pending', label: '確認待ち' },
         { value: 'confirmed', label: '確認済み' },
         { value: 'rejected', label: '差戻し' },
+        { value: 'review_rejected', label: '再鑑差戻し' },
       ];
 
   const filteredDocuments = documents.filter(doc => {

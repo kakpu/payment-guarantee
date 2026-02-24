@@ -2,13 +2,15 @@ import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
-import { FileText, CheckCircle, Clock, XCircle, TrendingUp } from 'lucide-react';
+import { FileText, CheckCircle, Clock, XCircle, TrendingUp, RotateCcw, ShieldCheck } from 'lucide-react';
 
 interface Stats {
   total: number;
   uploaded: number;
-  confirmed: number;
+  reviewPending: number;
+  reviewed: number;
   rejected: number;
+  reviewRejected: number;
 }
 
 export function Dashboard() {
@@ -17,8 +19,10 @@ export function Dashboard() {
   const [stats, setStats] = useState<Stats>({
     total: 0,
     uploaded: 0,
-    confirmed: 0,
+    reviewPending: 0,
+    reviewed: 0,
     rejected: 0,
+    reviewRejected: 0,
   });
   const [loading, setLoading] = useState(true);
 
@@ -40,8 +44,10 @@ export function Dashboard() {
       const newStats = {
         total: data.length,
         uploaded: data.filter(d => d.status === 'uploaded' || d.status === 'ocr_processing' || d.status === 'ocr_completed').length,
-        confirmed: data.filter(d => d.status === 'confirmed').length,
+        reviewPending: data.filter(d => d.status === 'confirmed').length,
+        reviewed: data.filter(d => d.status === 'reviewed').length,
         rejected: data.filter(d => d.status === 'rejected').length,
+        reviewRejected: data.filter(d => d.status === 'review_rejected').length,
       };
 
       setStats(newStats);
@@ -69,11 +75,18 @@ export function Dashboard() {
       iconBg: 'bg-amber-100',
     },
     {
-      title: '確認済み',
-      value: stats.confirmed,
+      title: '再鑑待ち',
+      value: stats.reviewPending,
       icon: CheckCircle,
       color: 'bg-green-50 text-green-600',
       iconBg: 'bg-green-100',
+    },
+    {
+      title: '再鑑OK',
+      value: stats.reviewed,
+      icon: ShieldCheck,
+      color: 'bg-teal-50 text-teal-600',
+      iconBg: 'bg-teal-100',
     },
     {
       title: '差戻し',
@@ -81,6 +94,13 @@ export function Dashboard() {
       icon: XCircle,
       color: 'bg-red-50 text-red-600',
       iconBg: 'bg-red-100',
+    },
+    {
+      title: '再鑑差戻し',
+      value: stats.reviewRejected,
+      icon: RotateCcw,
+      color: 'bg-orange-50 text-orange-600',
+      iconBg: 'bg-orange-100',
     },
   ];
 
@@ -99,7 +119,7 @@ export function Dashboard() {
         <p className="text-gray-600">書類処理の状況を確認できます</p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         {statCards.map((card) => (
           <div
             key={card.title}
@@ -131,14 +151,14 @@ export function Dashboard() {
             <div className="flex justify-between text-sm mb-2">
               <span className="text-gray-600">処理済み率</span>
               <span className="font-medium text-gray-900">
-                {stats.total > 0 ? Math.round(((stats.confirmed + stats.rejected) / stats.total) * 100) : 0}%
+                {stats.total > 0 ? Math.round(((stats.reviewPending + stats.reviewed + stats.rejected + stats.reviewRejected) / stats.total) * 100) : 0}%
               </span>
             </div>
             <div className="w-full bg-slate-200 rounded-full h-2">
               <div
                 className="bg-gradient-to-r from-blue-600 to-blue-500 h-2 rounded-full transition-all duration-500"
                 style={{
-                  width: `${stats.total > 0 ? ((stats.confirmed + stats.rejected) / stats.total) * 100 : 0}%`,
+                  width: `${stats.total > 0 ? ((stats.reviewPending + stats.reviewed + stats.rejected + stats.reviewRejected) / stats.total) * 100 : 0}%`,
                 }}
               ></div>
             </div>
