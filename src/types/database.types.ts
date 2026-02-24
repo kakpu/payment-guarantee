@@ -16,7 +16,7 @@ export type Database = {
           user_id: string
           document_type: 'mynumber_card' | 'drivers_license'
           image_url: string
-          status: 'uploaded' | 'ocr_processing' | 'ocr_completed' | 'confirmed' | 'rejected'
+          status: 'uploaded' | 'ocr_processing' | 'ocr_completed' | 'confirmed' | 'rejected' | 'reviewed' | 'review_rejected'
           created_at: string
           updated_at: string
         }
@@ -25,7 +25,7 @@ export type Database = {
           user_id: string
           document_type: 'mynumber_card' | 'drivers_license'
           image_url: string
-          status?: 'uploaded' | 'ocr_processing' | 'ocr_completed' | 'confirmed' | 'rejected'
+          status?: 'uploaded' | 'ocr_processing' | 'ocr_completed' | 'confirmed' | 'rejected' | 'reviewed' | 'review_rejected'
           created_at?: string
           updated_at?: string
         }
@@ -34,7 +34,7 @@ export type Database = {
           user_id?: string
           document_type?: 'mynumber_card' | 'drivers_license'
           image_url?: string
-          status?: 'uploaded' | 'ocr_processing' | 'ocr_completed' | 'confirmed' | 'rejected'
+          status?: 'uploaded' | 'ocr_processing' | 'ocr_completed' | 'confirmed' | 'rejected' | 'reviewed' | 'review_rejected'
           created_at?: string
           updated_at?: string
         }
@@ -89,7 +89,7 @@ export type Database = {
           id: string
           document_id: string
           operator_id: string
-          action: 'uploaded' | 'ocr_extracted' | 'confirmed' | 'rejected' | 'modified'
+          action: 'uploaded' | 'ocr_extracted' | 'confirmed' | 'rejected' | 'modified' | 'reviewed' | 'review_rejected'
           changes: Json
           created_at: string
         }
@@ -97,7 +97,7 @@ export type Database = {
           id?: string
           document_id: string
           operator_id: string
-          action: 'uploaded' | 'ocr_extracted' | 'confirmed' | 'rejected' | 'modified'
+          action: 'uploaded' | 'ocr_extracted' | 'confirmed' | 'rejected' | 'modified' | 'reviewed' | 'review_rejected'
           changes?: Json
           created_at?: string
         }
@@ -105,7 +105,7 @@ export type Database = {
           id?: string
           document_id?: string
           operator_id?: string
-          action?: 'uploaded' | 'ocr_extracted' | 'confirmed' | 'rejected' | 'modified'
+          action?: 'uploaded' | 'ocr_extracted' | 'confirmed' | 'rejected' | 'modified' | 'reviewed' | 'review_rejected'
           changes?: Json
           created_at?: string
         }
@@ -181,6 +181,28 @@ export type Database = {
             referencedColumns: ['id']
           }
         ]
+      }
+    }
+      user_roles: {
+        Row: {
+          id: string
+          user_id: string
+          role: 'operator' | 'reviewer'
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          role: 'operator' | 'reviewer'
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          role?: 'operator' | 'reviewer'
+          created_at?: string
+        }
+        Relationships: []
       }
     }
     Views: { [_ in never]: never }

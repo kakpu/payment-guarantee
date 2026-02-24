@@ -18,8 +18,9 @@ interface DocumentListProps {
 }
 
 export function DocumentList({ onViewDocument }: DocumentListProps) {
-  const { user } = useAuth();
+  const { user, userRole } = useAuth();
   const { showError } = useToast();
+  const isReviewer = userRole === 'reviewer';
   const [documents, setDocuments] = useState<Document[]>([]);
   // ドキュメントID → 署名付きURL のマップ（有効期限1時間）
   const [signedUrls, setSignedUrls] = useState<Record<string, string>>({});
@@ -30,17 +31,21 @@ export function DocumentList({ onViewDocument }: DocumentListProps) {
 
   useEffect(() => {
     loadDocuments();
-  }, [user]);
+  }, [user, userRole]);
 
   const loadDocuments = async () => {
     if (!user) return;
 
     try {
-      const { data, error } = await supabase
+      // 再鑑者は全書類を取得、オペレーターは自分の書類のみ
+      const query = supabase
         .from('documents')
         .select('*')
-        .eq('user_id', user.id)
         .order('created_at', { ascending: false });
+
+      const { data, error } = isReviewer
+        ? await query
+        : await query.eq('user_id', user.id);
 
       if (error) throw error;
       const docs = data || [];
@@ -93,6 +98,18 @@ export function DocumentList({ onViewDocument }: DocumentListProps) {
           icon: XCircle,
           color: 'text-red-600 bg-red-50 border-red-200',
         };
+      case 'reviewed':
+        return {
+          label: '再鑑OK',
+          icon: CheckCircle,
+          color: 'text-teal-600 bg-teal-50 border-teal-200',
+        };
+      case 'review_rejected':
+        return {
+          label: '再鑑差戻し',
+          icon: XCircle,
+          color: 'text-orange-600 bg-orange-50 border-orange-200',
+        };
       default:
         return {
           label: status,
@@ -106,11 +123,31 @@ export function DocumentList({ onViewDocument }: DocumentListProps) {
     return type === 'mynumber_card' ? 'マイナンバーカード' : '運転免許証';
   };
 
+  // 再鑑者とオペレーターでフィルター選択肢を切り替える
+  const filterOptions = isReviewer
+    ? [
+        { value: 'all', label: 'すべて' },
+        { value: 'review_pending', label: '再鑑待ち' },
+        { value: 'reviewed', label: '再鑑OK' },
+        { value: 'review_rejected', label: '再鑑差戻し' },
+      ]
+    : [
+        { value: 'all', label: 'すべて' },
+        { value: 'pending', label: '確認待ち' },
+        { value: 'confirmed', label: '確認済み' },
+        { value: 'rejected', label: '差戻し' },
+      ];
+
   const filteredDocuments = documents.filter(doc => {
     if (filter === 'all') return true;
+    // オペレーター用フィルター
     if (filter === 'pending') return ['uploaded', 'ocr_processing', 'ocr_completed'].includes(doc.status);
     if (filter === 'confirmed') return doc.status === 'confirmed';
     if (filter === 'rejected') return doc.status === 'rejected';
+    // 再鑑者用フィルター
+    if (filter === 'review_pending') return doc.status === 'confirmed';
+    if (filter === 'reviewed') return doc.status === 'reviewed';
+    if (filter === 'review_rejected') return doc.status === 'review_rejected';
     return true;
   });
 
@@ -127,17 +164,14 @@ export function DocumentList({ onViewDocument }: DocumentListProps) {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-gray-900 mb-2">書類一覧</h1>
-          <p className="text-gray-600">アップロードした書類を確認できます</p>
+          <p className="text-gray-600">
+            {isReviewer ? '再鑑が必要な書類を確認できます' : 'アップロードした書類を確認できます'}
+          </p>
         </div>
       </div>
 
       <div className="flex gap-2 overflow-x-auto pb-2">
-        {[
-          { value: 'all', label: 'すべて' },
-          { value: 'pending', label: '確認待ち' },
-          { value: 'confirmed', label: '確認済み' },
-          { value: 'rejected', label: '差戻し' },
-        ].map((option) => (
+        {filterOptions.map((option) => (
           <button
             key={option.value}
             onClick={() => setFilter(option.value)}

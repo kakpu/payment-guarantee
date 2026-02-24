@@ -27,12 +27,17 @@ interface HistoryItem {
   action: string;
   created_at: string;
   operator_id: string;
-  changes: unknown;
+  changes: {
+    comment?: string;
+    old?: unknown;
+    new?: unknown;
+  };
 }
 
 export function DocumentDetail({ documentId, onBack }: DocumentDetailProps) {
-  const { user } = useAuth();
+  const { user, userRole } = useAuth();
   const { showError, showSuccess } = useToast();
+  const isReviewer = userRole === 'reviewer';
   const [document, setDocument] = useState<DocumentData | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -46,6 +51,9 @@ export function DocumentDetail({ documentId, onBack }: DocumentDetailProps) {
   const [imageLoadFailed, setImageLoadFailed] = useState(false);
   // OCR 処理中のポーリングタイマー参照
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // 再鑑差戻しコメント
+  const [reviewComment, setReviewComment] = useState('');
+  const [showReviewRejectForm, setShowReviewRejectForm] = useState(false);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -148,7 +156,7 @@ export function DocumentDetail({ documentId, onBack }: DocumentDetailProps) {
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      setHistory(data || []);
+      setHistory((data || []) as HistoryItem[]);
     } catch (err) {
       showError('操作履歴の取得に失敗しました。');
       console.error('Error loading history:', err);
@@ -249,6 +257,70 @@ export function DocumentDetail({ documentId, onBack }: DocumentDetailProps) {
     }
   };
 
+  // 再鑑OK
+  const handleReview = async () => {
+    if (!user) return;
+
+    setSaving(true);
+    try {
+      await supabase
+        .from('documents')
+        .update({ status: 'reviewed', updated_at: new Date().toISOString() })
+        .eq('id', documentId);
+
+      await supabase.from('document_history').insert({
+        document_id: documentId,
+        operator_id: user.id,
+        action: 'reviewed',
+        changes: {},
+      });
+
+      await loadDocument();
+      await loadHistory();
+      showSuccess('再鑑OKにしました');
+    } catch (err) {
+      showError('再鑑OK操作に失敗しました。再試行してください。');
+      console.error('Error reviewing:', err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // 再鑑差戻し（コメント必須）
+  const handleReviewReject = async () => {
+    if (!user) return;
+    if (!reviewComment.trim()) {
+      showError('差戻し理由を入力してください。');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      await supabase
+        .from('documents')
+        .update({ status: 'review_rejected', updated_at: new Date().toISOString() })
+        .eq('id', documentId);
+
+      await supabase.from('document_history').insert({
+        document_id: documentId,
+        operator_id: user.id,
+        action: 'review_rejected',
+        changes: { comment: reviewComment.trim() },
+      });
+
+      await loadDocument();
+      await loadHistory();
+      setShowReviewRejectForm(false);
+      setReviewComment('');
+      showSuccess('再鑑差戻しました');
+    } catch (err) {
+      showError('再鑑差戻し操作に失敗しました。再試行してください。');
+      console.error('Error review rejecting:', err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const getActionLabel = (action: string) => {
     const labels: Record<string, string> = {
       uploaded: 'アップロード',
@@ -256,6 +328,8 @@ export function DocumentDetail({ documentId, onBack }: DocumentDetailProps) {
       confirmed: '確認済み',
       rejected: '差戻し',
       modified: '修正',
+      reviewed: '再鑑OK',
+      review_rejected: '再鑑差戻し',
     };
     return labels[action] || action;
   };
@@ -281,9 +355,15 @@ export function DocumentDetail({ documentId, onBack }: DocumentDetailProps) {
 
   const isConfirmed = document.status === 'confirmed';
   const isRejected = document.status === 'rejected';
+  const isReviewed = document.status === 'reviewed';
+  const isReviewRejected = document.status === 'review_rejected';
   // OCR 処理中はフォームを編集不可にする
   const isOcrProcessing = document.status === 'ocr_processing';
-  const isFormDisabled = isConfirmed || isRejected || isOcrProcessing;
+  // 再鑑者・confirmed 以降・OCR処理中はフォームを編集不可
+  const isFormDisabled = isConfirmed || isRejected || isOcrProcessing || isReviewed || isReviewRejected || isReviewer;
+
+  // 再鑑差戻し時のコメントを履歴から取得する（最新の review_rejected アクション）
+  const reviewRejectComment = history.find(h => h.action === 'review_rejected')?.changes.comment;
 
   return (
     <div className="space-y-6">
@@ -378,6 +458,10 @@ export function DocumentDetail({ documentId, onBack }: DocumentDetailProps) {
                         {new Date(item.created_at).toLocaleString('ja-JP')}
                       </span>
                     </div>
+                    {/* 再鑑差戻しのコメントを履歴に表示 */}
+                    {item.action === 'review_rejected' && item.changes.comment && (
+                      <p className="text-xs text-gray-600 mt-1">{item.changes.comment}</p>
+                    )}
                   </div>
                 ))}
               </div>
@@ -430,7 +514,8 @@ export function DocumentDetail({ documentId, onBack }: DocumentDetailProps) {
               />
             </div>
 
-            {!isFormDisabled && (
+            {/* オペレーター向けボタン（未確定状態 かつ 再鑑者でない場合のみ表示） */}
+            {!isFormDisabled && !isReviewer && (
               <div className="space-y-3 pt-4">
                 <button
                   onClick={handleSave}
@@ -462,6 +547,60 @@ export function DocumentDetail({ documentId, onBack }: DocumentDetailProps) {
               </div>
             )}
 
+            {/* 再鑑者ボタン（再鑑者 かつ confirmed 状態のみ表示） */}
+            {isReviewer && isConfirmed && (
+              <div className="space-y-3 pt-4">
+                <button
+                  onClick={handleReview}
+                  disabled={saving}
+                  className="w-full bg-teal-600 text-white py-3 rounded-lg font-medium hover:bg-teal-700 transition disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  <CheckCircle className="w-5 h-5" />
+                  再鑑OK
+                </button>
+
+                {!showReviewRejectForm ? (
+                  <button
+                    onClick={() => setShowReviewRejectForm(true)}
+                    disabled={saving}
+                    className="w-full bg-orange-600 text-white py-3 rounded-lg font-medium hover:bg-orange-700 transition disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    <XCircle className="w-5 h-5" />
+                    再鑑差戻し
+                  </button>
+                ) : (
+                  <div className="space-y-2">
+                    <label className="block text-sm font-medium text-gray-700">
+                      差戻し理由（必須）
+                    </label>
+                    <textarea
+                      value={reviewComment}
+                      onChange={(e) => setReviewComment(e.target.value)}
+                      rows={3}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                      placeholder="差戻し理由を入力してください"
+                    />
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => { setShowReviewRejectForm(false); setReviewComment(''); }}
+                        className="bg-gray-100 text-gray-700 py-2 rounded-lg font-medium hover:bg-gray-200 transition"
+                      >
+                        キャンセル
+                      </button>
+                      <button
+                        onClick={handleReviewReject}
+                        disabled={saving || !reviewComment.trim()}
+                        className="bg-orange-600 text-white py-2 rounded-lg font-medium hover:bg-orange-700 transition disabled:opacity-50"
+                      >
+                        差戻し確定
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ステータスバナー */}
             {isOcrProcessing && (
               <div className="bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded-lg flex items-center gap-2">
                 <Scan className="w-5 h-5 animate-pulse" />
@@ -469,7 +608,7 @@ export function DocumentDetail({ documentId, onBack }: DocumentDetailProps) {
               </div>
             )}
 
-            {isConfirmed && (
+            {isConfirmed && !isReviewer && (
               <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg flex items-center gap-2">
                 <CheckCircle className="w-5 h-5" />
                 <span className="font-medium">この書類は確認済みです</span>
@@ -480,6 +619,25 @@ export function DocumentDetail({ documentId, onBack }: DocumentDetailProps) {
               <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg flex items-center gap-2">
                 <XCircle className="w-5 h-5" />
                 <span className="font-medium">この書類は差戻されました</span>
+              </div>
+            )}
+
+            {isReviewed && (
+              <div className="bg-teal-50 border border-teal-200 text-teal-700 px-4 py-3 rounded-lg flex items-center gap-2">
+                <CheckCircle className="w-5 h-5" />
+                <span className="font-medium">この書類は再鑑済みです</span>
+              </div>
+            )}
+
+            {isReviewRejected && (
+              <div className="bg-orange-50 border border-orange-200 text-orange-700 px-4 py-3 rounded-lg space-y-1">
+                <div className="flex items-center gap-2">
+                  <XCircle className="w-5 h-5 shrink-0" />
+                  <span className="font-medium">この書類は再鑑差戻しされました</span>
+                </div>
+                {reviewRejectComment && (
+                  <p className="text-sm pl-7">{reviewRejectComment}</p>
+                )}
               </div>
             )}
           </div>
