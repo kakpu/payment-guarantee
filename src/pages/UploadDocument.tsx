@@ -90,9 +90,19 @@ export function UploadDocument() {
       // アップロード完了後、OCR Edge Function を呼び出す
       setRunningOcr(true);
       try {
+        // セッションを明示的に取得して Authorization ヘッダーに付与する
+        // （supabase.functions.invoke が自動付与できない場合の安全策）
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) {
+          throw new Error('SESSION_EXPIRED');
+        }
+
         const { data: ocrResult, error: ocrError } = await supabase.functions.invoke(
           'ocr-extract',
-          { body: { document_id: document.id } },
+          {
+            body: { document_id: document.id },
+            headers: { Authorization: `Bearer ${session.access_token}` },
+          },
         );
 
         if (ocrError) throw ocrError;
@@ -103,9 +113,15 @@ export function UploadDocument() {
         } else {
           showSuccess('アップロード・OCR 抽出が完了しました');
         }
-      } catch {
+      } catch (ocrErr) {
         // OCR 失敗はアップロード自体の成功には影響しない
-        showSuccess('アップロード完了。OCR に失敗したため手動で入力してください');
+        const isSessionExpired =
+          ocrErr instanceof Error && ocrErr.message === 'SESSION_EXPIRED';
+        showSuccess(
+          isSessionExpired
+            ? 'アップロード完了。セッション切れのため再ログイン後、書類詳細から手動入力してください'
+            : 'アップロード完了。OCR に失敗したため手動で入力してください',
+        );
       } finally {
         setRunningOcr(false);
       }
