@@ -35,20 +35,53 @@ function extractName(text: string): string | null {
   return match[1].trim().replace(/[　\s]+/g, ' ');
 }
 
+// 47都道府県の正規表現パターン（住所アンカーとして使用）
+const PREFECTURE_PATTERN =
+  '北海道|東京都|大阪府|京都府|' +
+  '青森県|岩手県|宮城県|秋田県|山形県|福島県|' +
+  '茨城県|栃木県|群馬県|埼玉県|千葉県|神奈川県|' +
+  '新潟県|富山県|石川県|福井県|山梨県|長野県|' +
+  '岐阜県|静岡県|愛知県|三重県|' +
+  '滋賀県|兵庫県|奈良県|和歌山県|' +
+  '鳥取県|島根県|岡山県|広島県|山口県|' +
+  '徳島県|香川県|愛媛県|高知県|' +
+  '福岡県|佐賀県|長崎県|熊本県|大分県|宮崎県|鹿児島県|沖縄県';
+
+// 番地区切り文字（全角・半角ハイフン類）
+const BANCHI_SEP = '[ー－‐\\-]';
+
 // Vision API のフルテキストから住所を抽出する
-// "住所" ラベルの後に続く都道府県以降の文字列を取得
+// 第1パターン: 都道府県アンカー + 番地（数字区切り）+ マンション名等（最大30字）でカット
+// 第2パターン: 都道府県が取れない場合は住所ラベル後の1行分（最大70字）
 function extractAddress(text: string): string | null {
-  const match = text.match(/住[　\s]*所[　\s]*(.+?)(?=\n\n|\n[氏生]|$)/su);
-  if (!match) return null;
-  return match[1].trim().replace(/\n/g, '').replace(/[　\s]+/g, ' ');
+  // 第1パターン: 都道府県を起点にして番地後30字で打ち切る
+  // 番地は 2区切り（1-2）または 3区切り（1-2-3）に対応
+  const anchoredMatch = text.match(
+    new RegExp(
+      `住[　\\s]*所[　\\s]*((${PREFECTURE_PATTERN})[^\\n]{1,60}?` +
+      `\\d{1,4}${BANCHI_SEP}\\d{1,4}(?:${BANCHI_SEP}\\d{1,4})?` +  // 番地（2〜3区切り）
+      `[^\\n\\r]{0,30})`,                                            // マンション名等（最大30字）
+      'u',
+    ),
+  );
+  if (anchoredMatch) {
+    return anchoredMatch[1].trim().replace(/[　\s]+/g, ' ');
+  }
+
+  // 第2パターン（フォールバック）: OCR が都道府県を読み誤った場合など
+  // 住所ラベル後の改行前1行分のみ取得（最大70字）
+  const fallbackMatch = text.match(/住[　\s]*所[　\s]*([^\n\r]{10,70})/u);
+  if (!fallbackMatch) return null;
+  return fallbackMatch[1].trim().replace(/[　\s]+/g, ' ');
 }
 
 // Vision API のフルテキストから生年月日を抽出し YYYY-MM-DD 形式で返す
 // 和暦（昭和・平成・令和等）と西暦の両方に対応
 function extractBirthDate(text: string): string | null {
   // 和暦パターン: 生年月日 昭和55年1月1日
+  // 元号年は 1〜2桁（令和1年〜 / 昭和63年まで）、月日も 1〜2桁に限定
   const jpMatch = text.match(
-    /生[　\s]*年[　\s]*月[　\s]*日[　\s]*(明治|大正|昭和|平成|令和)[　\s]*(\d+)[　\s]*年[　\s]*(\d+)[　\s]*月[　\s]*(\d+)[　\s]*日/u,
+    /生[　\s]*年[　\s]*月[　\s]*日[　\s]*(明治|大正|昭和|平成|令和)[　\s]*(\d{1,2})[　\s]*年[　\s]*(\d{1,2})[　\s]*月[　\s]*(\d{1,2})[　\s]*日/u,
   );
   if (jpMatch) {
     const offset = ERA_OFFSETS[jpMatch[1]];
@@ -59,15 +92,14 @@ function extractBirthDate(text: string): string | null {
     return `${year}-${month}-${day}`;
   }
 
-  // 西暦パターン: 生年月日 1990年1月1日
+  // 西暦パターン: 生年月日 1990年1月1日（年は4桁固定）
   const adMatch = text.match(
-    /生[　\s]*年[　\s]*月[　\s]*日[　\s]*(\d{4})[　\s]*年[　\s]*(\d+)[　\s]*月[　\s]*(\d+)[　\s]*日/u,
+    /生[　\s]*年[　\s]*月[　\s]*日[　\s]*(\d{4})[　\s]*年[　\s]*(\d{1,2})[　\s]*月[　\s]*(\d{1,2})[　\s]*日/u,
   );
   if (adMatch) {
-    const year = adMatch[1];
     const month = String(parseInt(adMatch[2])).padStart(2, '0');
     const day = String(parseInt(adMatch[3])).padStart(2, '0');
-    return `${year}-${month}-${day}`;
+    return `${adMatch[1]}-${month}-${day}`;
   }
 
   return null;
