@@ -27,6 +27,7 @@ interface HistoryItem {
   action: string;
   created_at: string;
   operator_id: string;
+  operator_email: string | null;
   changes: {
     comment?: string;
     old?: unknown;
@@ -156,7 +157,24 @@ export function DocumentDetail({ documentId, onBack }: DocumentDetailProps) {
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      setHistory((data || []) as HistoryItem[]);
+
+      const items = (data || []) as Omit<HistoryItem, 'operator_email'>[];
+
+      // ユニークな operator_id を抽出してメールアドレスを一括取得
+      const operatorIds = [...new Set(items.map((h) => h.operator_id))];
+      const { data: profilesData } = await supabase
+        .from('profiles')
+        .select('id, email')
+        .in('id', operatorIds);
+
+      const emailMap: Record<string, string> = {};
+      (profilesData || []).forEach((p: { id: string; email: string }) => {
+        emailMap[p.id] = p.email;
+      });
+
+      setHistory(
+        items.map((h) => ({ ...h, operator_email: emailMap[h.operator_id] ?? null }))
+      );
     } catch (err) {
       showError('操作履歴の取得に失敗しました。');
       console.error('Error loading history:', err);
@@ -458,6 +476,10 @@ export function DocumentDetail({ documentId, onBack }: DocumentDetailProps) {
                         {new Date(item.created_at).toLocaleString('ja-JP')}
                       </span>
                     </div>
+                    {/* 操作者のメールアドレスを表示 */}
+                    {item.operator_email && (
+                      <p className="text-xs text-gray-400">{item.operator_email}</p>
+                    )}
                     {/* 再鑑差戻しのコメントを履歴に表示 */}
                     {item.action === 'review_rejected' && item.changes.comment && (
                       <p className="text-xs text-gray-600 mt-1">{item.changes.comment}</p>
